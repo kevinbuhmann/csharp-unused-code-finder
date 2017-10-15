@@ -7,7 +7,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Reflection;
 using System.Threading.Tasks;
 using Vstack.Common.Extensions;
 
@@ -44,32 +43,53 @@ namespace UnusedCodeFinder
             {
                 Solution solution = await workspace.OpenSolutionAsync(solutionPath);
 
-                IEnumerable<Document> documents = solution.Projects
+                IEnumerable<KeyValuePair<string, MemberDeclarationSyntax>> allUnusedDeclarations = await solution.Projects
                     .SelectMany(project => project.Documents)
-                    .Where(document => document.FilePath.EndsWith(".cs"));
+                    .Where(document => document.FilePath.EndsWith(".cs"))
+                    .SelectManyAsync(document => FindUnusedDeclarations(solution, document));
 
-                foreach (Document document in documents)
+                IEnumerable<IGrouping<string, MemberDeclarationSyntax>> unusedDeclarationByFile = allUnusedDeclarations
+                    .GroupBy(kvp => kvp.Key, kvp => kvp.Value)
+                    .OrderBy(group => group.Key)
+                    .AsEnumerable();
+
+                foreach (IGrouping<string, MemberDeclarationSyntax> unusedDeclarations in unusedDeclarationByFile)
                 {
                     Console.WriteLine();
-                    Console.WriteLine($"Processing document {document.FilePath}... ");
+                    Console.WriteLine($"Unused declarations in {unusedDeclarations.Key}:");
 
-                    SyntaxNode syntaxRoot = await document.GetSyntaxRootAsync();
-                    SemanticModel semanticModel = await document.GetSemanticModelAsync();
-
-                    IEnumerable<MemberDeclarationSyntax> declarations = syntaxRoot.DescendantNodes().OfType<MemberDeclarationSyntax>();
-
-                    foreach (MemberDeclarationSyntax declaration in declarations)
+                    foreach (MemberDeclarationSyntax unusedDeclaration in unusedDeclarations)
                     {
-                        ISymbol symbol = semanticModel.GetDeclaredSymbol(declaration);
-                        IEnumerable<ReferencedSymbol> references = await SymbolFinder.FindReferencesAsync(symbol, solution);
-
-                        if (references.Where(reference => reference.Locations.Any()).Any() == false)
-                        {
-                            Console.WriteLine($"*** Unused {declaration.GetType().Name}: {declaration.GetIdentifer()}");
-                        }
+                        Console.WriteLine($"{unusedDeclaration.GetType().Name}: {unusedDeclaration.GetIdentifer()}");
                     }
                 }
             }
+        }
+
+        private static async Task<IEnumerable<KeyValuePair<string, MemberDeclarationSyntax>>> FindUnusedDeclarations(Solution solution, Document document)
+        {
+            SyntaxNode syntaxRoot = await document.GetSyntaxRootAsync();
+            SemanticModel semanticModel = await document.GetSemanticModelAsync();
+
+            IEnumerable<MemberDeclarationSyntax> declarations = new MemberDeclarationSyntax[] { }
+                .Concat(syntaxRoot.DescendantNodes().OfType<PropertyDeclarationSyntax>().Cast<MemberDeclarationSyntax>())
+                .Concat(syntaxRoot.DescendantNodes().OfType<MethodDeclarationSyntax>().Cast<MemberDeclarationSyntax>());
+
+            List<MemberDeclarationSyntax> unusedDeclarations = new List<MemberDeclarationSyntax>();
+
+            foreach (MemberDeclarationSyntax declaration in declarations)
+            {
+                ISymbol symbol = semanticModel.GetDeclaredSymbol(declaration);
+                IEnumerable<ReferencedSymbol> references = await SymbolFinder.FindReferencesAsync(symbol, solution);
+
+                if (references.Where(reference => reference.Locations.Any()).Any() == false)
+                {
+                    unusedDeclarations.Add(declaration);
+                }
+            }
+
+            return unusedDeclarations
+                .Select(declaration => new KeyValuePair<string, MemberDeclarationSyntax>(document.FilePath, declaration));
         }
     }
 }
