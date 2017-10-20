@@ -43,17 +43,12 @@ namespace UnusedCodeFinder
             {
                 Solution solution = await workspace.OpenSolutionAsync(solutionPath);
 
-                IEnumerable<KeyValuePair<string, MemberDeclarationSyntax>> allUnusedDeclarations = await solution.Projects
+                IEnumerable<SyntaxNodeGrouping<MemberDeclarationSyntax>> unusedDeclarationByFile = await solution.Projects
                     .SelectMany(project => project.Documents)
                     .Where(document => document.FilePath.EndsWith(".cs"))
-                    .SelectManyAsync(document => FindUnusedDeclarations(solution, document));
+                    .SelectAsync(document => FindUnusedDeclarations(solution, document).ContinueWith(task => new SyntaxNodeGrouping<MemberDeclarationSyntax>(document.FilePath, task.Result)));
 
-                IEnumerable<IGrouping<string, MemberDeclarationSyntax>> unusedDeclarationByFile = allUnusedDeclarations
-                    .GroupBy(kvp => kvp.Key, kvp => kvp.Value)
-                    .OrderBy(group => group.Key)
-                    .AsEnumerable();
-
-                foreach (IGrouping<string, MemberDeclarationSyntax> unusedDeclarations in unusedDeclarationByFile)
+                foreach (SyntaxNodeGrouping<MemberDeclarationSyntax> unusedDeclarations in unusedDeclarationByFile.Where(group => group.Any()).OrderBy(group => group.Key))
                 {
                     Console.WriteLine();
                     Console.WriteLine($"Unused declarations in {unusedDeclarations.Key}:");
@@ -66,7 +61,7 @@ namespace UnusedCodeFinder
             }
         }
 
-        private static async Task<IEnumerable<KeyValuePair<string, MemberDeclarationSyntax>>> FindUnusedDeclarations(Solution solution, Document document)
+        private static async Task<IEnumerable<MemberDeclarationSyntax>> FindUnusedDeclarations(Solution solution, Document document)
         {
             SyntaxNode syntaxRoot = await document.GetSyntaxRootAsync();
             SemanticModel semanticModel = await document.GetSemanticModelAsync();
@@ -88,8 +83,7 @@ namespace UnusedCodeFinder
                 }
             }
 
-            return unusedDeclarations
-                .Select(declaration => new KeyValuePair<string, MemberDeclarationSyntax>(document.FilePath, declaration));
+            return unusedDeclarations;
         }
     }
 }
